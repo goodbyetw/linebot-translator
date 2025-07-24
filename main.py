@@ -30,7 +30,12 @@ def detect_language(text):
         "key": GOOGLE_API_KEY
     }
     response = requests.post(url, data=params)
-    return response.json()['data']['detections'][0][0]['language']
+    if response.status_code != 200:
+        logging.error(f"[Detect Error] {response.status_code} - {response.text}")
+        return None
+    lang = response.json()['data']['detections'][0][0]['language']
+    logging.info(f"Detected language: {lang}")
+    return lang
 
 # 翻譯文字
 def translate_text(text, target_lang):
@@ -42,37 +47,51 @@ def translate_text(text, target_lang):
         "key": GOOGLE_API_KEY
     }
     response = requests.post(url, data=params)
-    return response.json()['data']['translations'][0]['translatedText']
+    if response.status_code != 200:
+        logging.error(f"[Translate Error] {response.status_code} - {response.text}")
+        return None
+    translated = response.json()['data']['translations'][0]['translatedText']
+    logging.info(f"Translated text: {translated}")
+    return translated
 
 # Webhook 路由
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
+    logging.info(f"[Webhook] Received body: {body}")
 
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
+        logging.warning("Invalid signature.")
         abort(400)
 
     return "OK"
 
-# 處理訊息事件
+# 處理文字訊息事件
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text_message(event):
     user_msg = event.message.text
-    source_lang = detect_language(user_msg)
+    logging.info(f"[User Message] {user_msg}")
 
-    if source_lang == "zh-TW":
+    source_lang = detect_language(user_msg)
+    if not source_lang:
+        return
+
+    if source_lang.startswith("zh"):
         target_lang = "id"
-    elif source_lang == "id":
+    elif source_lang in ["id", "ms"]:
         target_lang = "zh-TW"
     else:
-        # 若不是印尼文或中文就不翻譯
+        logging.info(f"No translation performed for language: {source_lang}")
         return
 
     translated = translate_text(user_msg, target_lang)
+    if not translated:
+        return
 
+    # 發送回應
     messaging_api.reply_message(
         ReplyMessageRequest(
             reply_token=event.reply_token,
@@ -85,4 +104,3 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
